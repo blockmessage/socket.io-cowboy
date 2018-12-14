@@ -20,7 +20,7 @@
 
 %% API
 -export([start_link/3, configure/1, create/3, find/1, pull/2, pull_no_wait/2, poll/1, send/2, recv/2,
-         send_message/2, send_obj/2, refresh/1, disconnect/1, unsub_caller/2]).
+         send_message/2, send_message/3, send_obj/2, send_obj/3, refresh/1, disconnect/1, unsub_caller/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -52,7 +52,7 @@ create(SessionTimeout, Callback, Opts) ->
     list_to_binary(http_uri:encode(base64:encode_to_string(term_to_binary(Pid)))).
 
 find(PidBin) ->
-    Pid = binary_to_term(base64:decode(PidBin)),
+    Pid = binary_to_term(base64:decode(http_uri:decode(PidBin))),
     case rpc:call(erlang:node(Pid), erlang, is_process_alive, [Pid]) of
         true ->
             {ok, Pid};
@@ -75,8 +75,14 @@ send(Pid, Message) ->
 send_message(Pid, Message) when is_binary(Message) ->
     gen_server:cast(Pid, {send, {message, <<>>, <<>>, Message}}).
 
+send_message(Pid, Event, Message) when is_binary(Message) ->
+    gen_server:cast(Pid, {send, {message, <<>>, Event, Message}}).
+
 send_obj(Pid, Obj) ->
     gen_server:cast(Pid, {send, {json, <<>>, <<>>, Obj}}).
+
+send_obj(Pid, Event, Obj) ->
+    gen_server:cast(Pid, {send, {json, <<>>, Event, Obj}}).
 
 recv(Pid, Messages) when is_list(Messages) ->
     gen_server:call(Pid, {recv, Messages}, infinity).
@@ -174,7 +180,7 @@ handle_info(session_timeout, State) ->
 handle_info(open_connection, State = #state{registered = false, callback = Callback, opts = Opts}) ->
     case Callback:open(self(), Opts) of
         {ok, SessionState} ->
-            send(self(), {connect, <<>>}),
+            %%send(self(), {connect, <<>>}),
             {noreply, State#state{registered = true, session_state = SessionState}};
         disconnect ->
             {stop, normal, State}
@@ -225,6 +231,13 @@ process_messages([Message|Rest], State = #state{callback = Callback, session_sta
         disconnect ->
             {stop, normal, ok, State};
         heartbeat ->
+            send(self(), heartbeat),
+            process_messages(Rest, State);
+        probe ->
+            send(self(), nop),
+            process_messages(Rest, State);
+        upgrade ->
+            %send(self(), nop),
             process_messages(Rest, State);
         {message, <<>>, EndPoint, Obj} ->
             case Callback:recv(self(), {message, EndPoint, Obj}, SessionState) of
