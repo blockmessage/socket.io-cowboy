@@ -67,7 +67,7 @@ nop() ->
     <<"6">>.
 
 message(_Id, EndPoint, Msg) ->
-    JsonBin = jsx:encode([EndPoint, #{placeholder=>true, num=>0}]),
+    JsonBin = jsx:encode([EndPoint, #{'_placeholder'=>true, num=>0}]),
     PlaceHolder = <<"451-", JsonBin/binary>>,
     [PlaceHolder, <<4, Msg/binary>>].
 
