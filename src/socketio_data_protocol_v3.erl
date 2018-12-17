@@ -3,10 +3,6 @@
 
 %% The source code was taken and modified from socketio_data_protocol.erl
 
-encode_polling([Message]) ->
-    Data = encode([Message]),
-    Size = byte_size(Data),
-    <<(integer_to_binary(Size))/binary, ":", Data/binary>>;
 encode_polling(Messages) ->
     iolist_to_binary(encode_polling_frames(Messages)).
 
