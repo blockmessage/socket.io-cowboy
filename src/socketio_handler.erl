@@ -24,7 +24,8 @@
 
 init(Req, [Config]) ->
     Method = cowboy_req:method(Req),
-    QS = maps:from_list(cowboy_req:parse_qs(Req)),
+    QS0 = maps:from_list(cowboy_req:parse_qs(Req)),
+    QS = QS0#{sid_hash=>erlang:phash2(maps:get(<<"sid">>,QS0,undefined), 10000)},
     case QS of
         #{<<"transport">> := <<"polling">>, <<"sid">> := Sid} when is_binary(Sid)->
             case {socketio_session:find(Sid), Method} of
@@ -32,12 +33,14 @@ init(Req, [Config]) ->
                     case socketio_session:pull_no_wait(Pid, self()) of
                         session_in_use ->
                             Req1 = cowboy_req:reply(404, text_headers(Req), <<>>, Req),
+                            error_logger:info_msg("qs=~p, res=session in use~n",[QS]),
                             {ok, Req1, #state{action = session_in_use, config = Config, sid = Sid}};
                         [] ->
                             TRef = erlang:start_timer(Config#config.heartbeat, self(), {?MODULE, Pid}),
                             {cowboy_loop, Req, #state{action = heartbeat, config = Config, sid = Sid, heartbeat_tref = TRef, pid = Pid}, hibernate};
                         Messages ->
                             Req1 = reply_messages(Req, Messages, Config, false),
+                            error_logger:info_msg("qs=~p, res=get ok~n",[QS]),
                             {ok, Req1, #state{action = data, messages = Messages, config = Config, sid = Sid, pid = Pid}}
                     end;
                 {{ok, Pid}, <<"POST">>} ->
@@ -47,20 +50,29 @@ init(Req, [Config]) ->
                             Messages = Protocol:decode_polling(Body),
                             socketio_session:recv(Pid, Messages),
                             Req2 = cowboy_req:reply(200, text_headers(Req), <<>>, Req1),
+                            error_logger:info_msg("qs=~p, res=put ok, body = ~p~n",[QS, Body]),
                             {ok, Req2, #state{action = ok, config = Config, sid = Sid}};
                         {error, _} ->
                             Req1 = cowboy_req:reply(404, text_headers(Req), <<>>, Req),
+                            error_logger:info_msg("qs=~p, res=put fail~n",[QS]),
                             {ok, Req1, #state{action = error, config = Config, sid = Sid}}
                     end;
+                {_, <<"OPTIONS">>} ->
+                    Req1 = cowboy_req:reply(200, text_headers(Req), <<>>, Req),
+                    error_logger:info_msg("qs=~p, res=option~n",[QS]),
+                    {ok, Req1, #state{action = not_found, sid = Sid, config = Config}};
                 {{error, not_found}, _} ->
                     Req1 = cowboy_req:reply(404, text_headers(Req), <<>>, Req),
+                    error_logger:info_msg("qs=~p, res=session not found~n",[QS]),
                     {ok, Req1, #state{action = not_found, sid = Sid, config = Config}};
-                _ ->
+                Other ->
                     Req1 = cowboy_req:reply(404, text_headers(Req), <<>>, Req),
+                    error_logger:info_msg("qs=~p, res=unknown:~p~n",[QS, Other]),
                     {ok, Req1, #state{action = error, sid = Sid, config = Config}}
             end;
 
         #{<<"transport">> := <<"websocket">>, <<"sid">> := Sid} when is_binary(Sid) ->
+            error_logger:info_msg("qs=~p, res=websocket ok~n",[QS]),
             {cowboy_websocket, Req, #state{config = Config, sid = Sid, is_ws = true}};
         #{<<"transport">> := <<"polling">>} ->
             #config{heartbeat_timeout = HeartbeatTimeout,
@@ -78,9 +90,11 @@ init(Req, [Config]) ->
             Result = <<(integer_to_binary(byte_size(Payload)+1))/binary,":0", Payload/binary, "2:40">>,
             Req01 = cowboy_req:set_resp_cookie(<<"io">>,NewSid,Req),
             Req1 = cowboy_req:reply(200, text_headers(Req), Result, Req01),
+            error_logger:info_msg("qs=~p, res=create session ok~n",[QS]),
             {ok, Req1, #state{action = create_session, config = Config}};
-        _ ->
+        Other ->
             Req1 = cowboy_req:reply(404, text_headers(Req), <<>>, Req),
+            error_logger:info_msg("qs=~p, res=unknown:~p~n",[QS, Other]),
             {ok, Req1, #state{config = Config}}
     end.
 
@@ -113,7 +127,11 @@ terminate(_Reason, _Req, _HttpState) ->
     ok.
 
 text_headers(Req) ->
-    Origin = cowboy_req:header(<<"origin">>, Req),
+    Origin = case cowboy_req:header(<<"origin">>, Req) of
+                 undefined -> <<"*">>;
+                 Ori -> Ori
+             end,
+    error_logger:info_msg("origin:~p~n", [Origin]),
     #{<<"content-type">> => <<"text/plain; charset=utf-8">>,
       <<"cache-control">> => <<"no-cache">>,
       <<"expires">> => <<"Sat, 25 Dec 1999 00:00:00 GMT">>,
@@ -183,6 +201,7 @@ websocket_handle({text, Data}, #state{config = #config{protocol = Protocol}, pid
             reply_ws_messages([probe], State);
         [upgrade] ->
             self() ! go,
+            error_logger:info_msg("upgrade ok", []),
             socketio_session:recv(Pid, Messages),
             {ok, State};
         _ ->
