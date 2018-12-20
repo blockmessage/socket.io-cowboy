@@ -49,16 +49,37 @@ configure(Opts) ->
 
 create(SessionTimeout, Callback, Opts) ->
     {ok, Pid} = socketio_session_sup:start_child(SessionTimeout, Callback, Opts),
-    list_to_binary(http_uri:encode(base64:encode_to_string(term_to_binary(Pid)))).
+    Time = integer_to_binary(erlang:system_time(micro_seconds),36),
+    Sign = sign(Pid, Time),
+    iolist_to_binary([http_uri:encode(base64:encode_to_string(term_to_binary(Pid))), "-", Sign, "-", Time]).
 
-find(PidBin) ->
-    Pid = binary_to_term(base64:decode(http_uri:decode(PidBin))),
-    case rpc:call(erlang:node(Pid), erlang, is_process_alive, [Pid]) of
-        true ->
-            {ok, Pid};
+find(SessionBin) ->
+    case binary:split(SessionBin, <<"-">>) of
+        [PidBin, Rest] ->
+            case binary:split(Rest, <<"-">>) of
+                [Sign, Time] ->
+                    Pid = binary_to_term(base64:decode(http_uri:decode(PidBin))),
+                    case sign(Pid, Time) == Sign of
+                        true ->
+                            case rpc:call(erlang:node(Pid), erlang, is_process_alive, [Pid]) of
+                                true ->
+                                    {ok, Pid};
+                                _ ->
+                                    {error, not_found}
+                            end;
+                        false ->
+                            {error, not_found}
+                    end;
+                _ ->
+                    {error, not_found}
+            end;
         _ ->
             {error, not_found}
     end.
+
+sign(Pid, Time) ->
+    Key = application:get_env(socketio, session_key, <<"ABCDEFGHIJKLMNOPQRSTUVWXYZ">>),
+    integer_to_binary(erlang:phash2({Pid, Time, Key, ?MODULE}, 2000000000), 36).
 
 pull(Pid, Caller) ->
     gen_server:call(Pid, {pull, Caller, true}, infinity).
