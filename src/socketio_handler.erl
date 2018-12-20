@@ -32,7 +32,7 @@ init(Req, [Config]) ->
                 {{ok, Pid}, <<"GET">>} ->
                     case socketio_session:pull_no_wait(Pid, self()) of
                         session_in_use ->
-                            Req1 = cowboy_req:reply(404, text_headers(Req), <<>>, Req),
+                            Req1 = cowboy_req:reply(200, text_headers(Req), <<"1:6">>, Req),
                             error_logger:info_msg("qs=~p, res=session in use~n",[QS]),
                             {ok, Req1, #state{action = session_in_use, config = Config, sid = Sid}};
                         [] ->
