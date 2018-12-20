@@ -127,11 +127,15 @@ terminate(_Reason, _Req, _HttpState) ->
     ok.
 
 text_headers(Req) ->
-    Origin = case cowboy_req:header(<<"origin">>, Req) of
-                 undefined -> <<"*">>;
-                 Ori -> Ori
-             end,
-    error_logger:info_msg("origin:~p~n", [Origin]),
+    case application:get_env(socketio, access_control_allow_origin, all) of
+        all ->
+            Origin = case cowboy_req:header(<<"origin">>, Req) of
+                         undefined -> <<"*">>;
+                         Ori -> Ori
+                     end;
+        Origin when is_binary(Origin) ->
+            ok
+    end,
     #{<<"content-type">> => <<"text/plain; charset=utf-8">>,
       <<"cache-control">> => <<"no-cache">>,
       <<"expires">> => <<"Sat, 25 Dec 1999 00:00:00 GMT">>,
