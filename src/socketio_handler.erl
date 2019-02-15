@@ -24,8 +24,7 @@
 
 init(Req, [Config]) ->
     Method = cowboy_req:method(Req),
-    QS0 = maps:from_list(cowboy_req:parse_qs(Req)),
-    QS = QS0#{sid_hash=>erlang:phash2(maps:get(<<"sid">>,QS0,undefined), 10000)},
+    QS = maps:from_list(cowboy_req:parse_qs(Req)),
     case QS of
         #{<<"transport">> := <<"polling">>, <<"sid">> := Sid} when is_binary(Sid)->
             case {socketio_session:find(Sid), Method} of
@@ -36,6 +35,7 @@ init(Req, [Config]) ->
                             error_logger:info_msg("qs=~p, res=session in use~n",[QS]),
                             {ok, Req1, #state{action = session_in_use, config = Config, sid = Sid}};
                         [] ->
+                            error_logger:info_msg("qs=~p, res=long poll~n",[QS]),
                             TRef = erlang:start_timer(Config#config.heartbeat, self(), {?MODULE, Pid}),
                             {cowboy_loop, Req, #state{action = heartbeat, config = Config, sid = Sid, heartbeat_tref = TRef, pid = Pid}, hibernate};
                         Messages ->
@@ -47,6 +47,7 @@ init(Req, [Config]) ->
                     Protocol = Config#config.protocol,
                     case cowboy_req:read_body(Req) of
                         {ok, Body, Req1} ->
+                            error_logger:info_msg("qs=~p, method=put, body = ~p~n",[QS, Body]),
                             Messages = Protocol:decode_polling(Body),
                             socketio_session:recv(Pid, Messages),
                             Req2 = cowboy_req:reply(200, text_headers(Req), <<>>, Req1),
@@ -103,6 +104,10 @@ info({timeout, TRef, {?MODULE, Pid}}, Req, HttpState = #state{action = heartbeat
 
 info({message_arrived, Pid}, Req, HttpState = #state{action = heartbeat}) ->
     safe_poll(Req, HttpState, Pid, true);
+
+info(kick_caller, Req, #state{config = Config}=HttpState) ->
+    Req1 = reply_messages(Req, [nop], Config, true),
+    {stop, Req1, HttpState};
 
 info(_Info, Req, HttpState) ->
     {ok, Req, HttpState}.
@@ -182,6 +187,7 @@ safe_poll(Req, HttpState = #state{config = Config = #config{protocol = Protocol}
         end
     catch
         exit:{noproc, _} ->
+            error_logger:error_msg("poll fail, go to stop~n",[]),
             RD = cowboy_req:reply(200, text_headers(Req), Protocol:encode(disconnect), Req),
             {stop, RD, HttpState#state{action = disconnect}}
     end.
@@ -191,7 +197,7 @@ websocket_init(#state{sid = Sid} = State) ->
     case socketio_session:find(Sid) of
         {ok, Pid} ->
             erlang:monitor(process, Pid),
-            self() ! go,
+            self() ! go_and_kick,
             {ok, State#state{pid = Pid}};
         {error, not_found} ->
             {stop, State}
@@ -219,6 +225,14 @@ websocket_handle({binary, Data}, #state{config = #config{protocol = Protocol}, p
 websocket_handle(_Data, State) ->
     {ok, State}.
 
+
+websocket_info(go_and_kick, #state{pid = Pid} = State) ->
+    case socketio_session:pull_kick(Pid, self()) of
+        session_in_use ->
+            {ok, State};
+        Messages ->
+            reply_ws_messages(Messages, State)
+    end;
 websocket_info(go, #state{pid = Pid} = State) ->
     case socketio_session:pull(Pid, self()) of
         session_in_use ->
@@ -231,6 +245,9 @@ websocket_info({message_arrived, Pid}, State) ->
     self() ! go,
     reply_ws_messages(Messages, State);
 websocket_info({'DOWN', _Ref, process, Pid, _Reason}, #state{pid = Pid} = State) ->
+    {stop, State};
+websocket_info(kick_caller, State) ->
+    reply_ws_messages([nop], State),
     {stop, State};
 websocket_info(_Info, State) ->
     {ok, State}.

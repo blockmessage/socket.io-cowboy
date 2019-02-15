@@ -20,6 +20,7 @@
 
 %% API
 -export([start_link/3, configure/1, create/3, find/1, pull/2, pull_no_wait/2, poll/1, send/2, recv/2,
+         pull_kick/2,
          send_message/2, send_message/3, send_obj/2, send_obj/3, refresh/1, disconnect/1, unsub_caller/2]).
 
 %% gen_server callbacks
@@ -82,10 +83,13 @@ sign(Pid, Time) ->
     integer_to_binary(erlang:phash2({Pid, Time, Key, ?MODULE}, 2000000000), 36).
 
 pull(Pid, Caller) ->
-    gen_server:call(Pid, {pull, Caller, true}, infinity).
+    gen_server:call(Pid, {pull, Caller, true, false}, infinity).
+
+pull_kick(Pid, Caller) ->
+    gen_server:call(Pid, {pull, Caller, true, true}, infinity).
 
 pull_no_wait(Pid, Caller) ->
-    gen_server:call(Pid, {pull, Caller, false}, infinity).
+    gen_server:call(Pid, {pull, Caller, false, false}, infinity).
 
 poll(Pid) ->
     gen_server:call(Pid, {poll}, infinity).
@@ -136,7 +140,7 @@ init([SessionTimeout, Callback, Opts]) ->
                 session_timeout = SessionTimeout}}.
 
 %%--------------------------------------------------------------------
-handle_call({pull, Pid, Wait}, _From,  State = #state{messages = Messages, caller = undefined}) ->
+handle_call({pull, Pid, Wait, _Kick}, _From,  State = #state{messages = Messages, caller = undefined}) ->
     State1 = refresh_session_timeout(State),
     case Messages of
         [] ->
@@ -151,7 +155,10 @@ handle_call({pull, Pid, Wait}, _From,  State = #state{messages = Messages, calle
             {reply, lists:reverse(Messages), State1#state{messages = [], caller = NewCaller}}
     end;
 
-handle_call({pull, _Pid, _}, _From,  State) ->
+handle_call({pull, Pid, Wait, true}, From, #state{caller = Caller}=State) when is_pid(Caller) ->
+    Caller ! kick_caller,
+    handle_call({pull, Pid, Wait, true}, From, State#state{caller = undefined});
+handle_call({pull, _Pid, _Wait, _Kick}, _From,  State) ->
     {reply, session_in_use, State};
 
 handle_call({poll}, _From, State = #state{messages = Messages}) ->
@@ -255,10 +262,8 @@ process_messages([Message|Rest], State = #state{callback = Callback, session_sta
             send(self(), heartbeat),
             process_messages(Rest, State);
         probe ->
-            send(self(), nop),
             process_messages(Rest, State);
         upgrade ->
-            %send(self(), nop),
             process_messages(Rest, State);
         {message, <<>>, EndPoint, Obj} ->
             case Callback:recv(self(), {message, EndPoint, Obj}, SessionState) of

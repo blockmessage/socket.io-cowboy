@@ -120,6 +120,7 @@ decode_packet(<<"1">>) -> disconnect;
 decode_packet(<<"2">>) -> heartbeat;
 decode_packet(<<"2probe">>) -> probe;
 decode_packet(<<"5">>) -> upgrade;
+decode_packet(<<"41">>) -> socketio_disconnect;
 decode_packet(<<"42", Rest/binary>>) ->
     case jsx:decode(Rest, [return_maps]) of
         [Event,Data] ->
