@@ -34,6 +34,10 @@ encode({json, Id, EndPoint, Message}) ->
     json(Id, EndPoint, Message);
 encode({connect, Endpoint}) ->
     connect(Endpoint);
+encode({raw, Binary}) ->
+    Binary;
+encode(open) ->
+    open();
 encode(heartbeat) ->
     heartbeat();
 encode(probe) ->
@@ -55,6 +59,9 @@ disconnect(Endpoint) ->
 
 heartbeat() ->
     <<"3">>.
+
+open() ->
+    <<"40">>.
 
 probe() ->
     <<"3probe">>.

@@ -20,7 +20,7 @@
          websocket_init/1, websocket_handle/2,
          websocket_info/2]).
 
--record(state, {action, config, sid, heartbeat_tref, messages, pid, is_ws = false}).
+-record(state, {action, config, sid, heartbeat_tref, messages, pid, is_ws = false, is_direct_ws = false}).
 
 init(Req, [Config]) ->
     Method = cowboy_req:method(Req),
@@ -75,6 +75,13 @@ init(Req, [Config]) ->
         #{<<"transport">> := <<"websocket">>, <<"sid">> := Sid} when is_binary(Sid) ->
             error_logger:info_msg("qs=~p, res=websocket ok~n",[QS]),
             {cowboy_websocket, Req, #state{config = Config, sid = Sid, is_ws = true}};
+        #{<<"transport">> := <<"websocket">>}  ->
+            error_logger:info_msg("qs=~p, res=websocket no sid, so create one~n",[QS]),
+            #config{session_timeout = SessionTimeout,
+                    opts = Opts,
+                    callback = Callback} = Config,
+            Sid = socketio_session:create(SessionTimeout, Callback, Opts),
+            {cowboy_websocket, Req, #state{config = Config, sid = Sid, is_ws = true, is_direct_ws = true}};
         #{<<"transport">> := <<"polling">>} ->
             #config{heartbeat_timeout = HeartbeatTimeout,
                     heartbeat = HeartbeatInterval,
@@ -193,10 +200,11 @@ safe_poll(Req, HttpState = #state{config = Config = #config{protocol = Protocol}
     end.
 
 %% Websocket handlers
-websocket_init(#state{sid = Sid} = State) ->
+websocket_init(#state{sid = Sid, is_direct_ws = IsDirectWS} = State) ->
     case socketio_session:find(Sid) of
         {ok, Pid} ->
             erlang:monitor(process, Pid),
+            IsDirectWS andalso ( self() ! direct_ws ),
             self() ! go_and_kick,
             {ok, State#state{pid = Pid}};
         {error, not_found} ->
@@ -240,6 +248,16 @@ websocket_info(go, #state{pid = Pid} = State) ->
         Messages ->
             reply_ws_messages(Messages, State)
     end;
+websocket_info(direct_ws, #state{sid = Sid, config = Config} = State) ->
+    #config{heartbeat_timeout = HeartbeatTimeout,
+                    heartbeat = HeartbeatInterval} = Config,
+            EndPoint = iolist_to_binary(jsx:encode(#{sid=>Sid,
+                                                    upgrades=>[],
+                                                    pingInterval=>HeartbeatInterval,
+                                                    pingTimeout=>HeartbeatTimeout})),
+    ConnectMessage = {connect, EndPoint},
+    OpenMessage = open,
+    reply_ws_messages([ConnectMessage, OpenMessage], State);
 websocket_info({message_arrived, Pid}, State) ->
     Messages =  socketio_session:poll(Pid),
     self() ! go,
