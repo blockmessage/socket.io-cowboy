@@ -179,7 +179,11 @@ safe_unsub_caller(Pid, Caller) ->
         ok
     catch
         exit:{noproc, _} -> error;
-        exit:{{nodedown,_},_} -> error
+        exit:{{nodedown,_},_} -> error;
+        exit:{normal, _} -> ok;
+        C:E ->
+            error_logger:info_msg("safe_unsub_caller unknown:~p~n",[{C,E}]),
+            error
     end.
 
 safe_poll(Req, HttpState = #state{config = Config = #config{protocol = Protocol}}, Pid, WaitIfEmpty) ->
