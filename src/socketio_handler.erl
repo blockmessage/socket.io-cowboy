@@ -80,7 +80,13 @@ init(Req, [Config]) ->
             #config{session_timeout = SessionTimeout,
                     opts = Opts,
                     callback = Callback} = Config,
-            Sid = socketio_session:create(SessionTimeout, Callback, Opts),
+            case is_map(Opts) of
+                true ->
+                    NewOpts = Opts#{req => Req};
+                false ->
+                    NewOpts = Opts
+            end,
+            Sid = socketio_session:create(SessionTimeout, Callback, NewOpts),
             {cowboy_websocket, Req, #state{config = Config, sid = Sid, is_ws = true, is_direct_ws = true}};
         #{<<"transport">> := <<"polling">>} ->
             #config{heartbeat_timeout = HeartbeatTimeout,
@@ -88,8 +94,13 @@ init(Req, [Config]) ->
                     session_timeout = SessionTimeout,
                     opts = Opts,
                     callback = Callback} = Config,
-
-            NewSid = socketio_session:create(SessionTimeout, Callback, Opts),
+            case is_map(Opts) of
+                true ->
+                    NewOpts = Opts#{req => Req};
+                false ->
+                    NewOpts = Opts
+            end,
+            NewSid = socketio_session:create(SessionTimeout, Callback, NewOpts),
 
             Payload = iolist_to_binary(jsx:encode(#{sid=>NewSid,
                                                     upgrades=>[<<"websocket">>],
